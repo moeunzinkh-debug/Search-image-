@@ -1,78 +1,65 @@
 import os
 import logging
 import threading
+import asyncio
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# 1. ការកំណត់ Logging និង Flask
+# 1. Setup Logging & Flask
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 server = Flask(__name__)
 @server.route('/')
-def health(): return "Image Search Bot is Active!", 200
+def health(): return "Render is keeping me alive!", 200
 
 def run_flask():
-    server.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+    # Render ជាទូទៅប្រើ Port 10000
+    port = int(os.environ.get("PORT", 10000))
+    server.run(host='0.0.0.0', port=port)
 
 TOKEN = os.environ.get("BOT_TOKEN")
+MY_USER_ID = os.environ.get("MY_USER_ID")
 
-# 2. មុខងារបង្កើត Buttons សម្រាប់ស្វែងរក
-def get_search_buttons(image_url):
-    # បង្កើត Links សម្រាប់ស្វែងរក
-    google_url = f"https://lens.google.com/uploadbyurl?url={image_url}"
-    yandex_url = f"https://yandex.com/images/search?rpt=imageview&url={image_url}"
-    baidu_url = f"https://graph.baidu.com/details?is_not_show_man_search=1&image={image_url}"
-    bing_url = f"https://www.bing.com/images/searchbyimage?cbir=sbi&imgurl={image_url}"
+# 2. Wakeup Task (ដាស់រាល់ ៥ នាទី ដើម្បីការពារ Render Sleep)
+async def keep_alive(app: Application):
+    while True:
+        try:
+            if MY_USER_ID:
+                await app.bot.send_message(chat_id=MY_USER_ID, text="💤 Render Keep-alive", disable_notification=True)
+            logger.info("Keep-alive ping sent.")
+        except: pass
+        await asyncio.sleep(300) 
 
-    # បង្កើតប៊ូតុងចុច (Inline Buttons)
+# 3. Image Search Logic
+def get_buttons(img_url):
     keyboard = [
-        [InlineKeyboardButton("🔍 Google Lens", url=google_url)],
-        [InlineKeyboardButton("🖼 Yandex Images", url=yandex_url)],
-        [InlineKeyboardButton("🇨🇳 Baidu Search", url=baidu_url)],
-        [InlineKeyboardButton("🔎 Bing Visual", url=bing_url)]
+        [InlineKeyboardButton("🔍 Google Lens", url=f"https://lens.google.com/uploadbyurl?url={img_url}")],
+        [InlineKeyboardButton("🖼 Yandex Images", url=f"https://yandex.com/images/search?rpt=imageview&url={img_url}")],
+        [InlineKeyboardButton("🇨🇳 Baidu Search", url=f"https://graph.baidu.com/details?is_not_show_man_search=1&image={img_url}")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# 3. Bot Handlers
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("សួស្តី! សូមផ្ញើរូបភាពមក ដើម្បីស្វែងរកប្រភពលើ Google, Yandex, Baidu និង Bing។")
-
-async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    status_msg = await update.message.reply_text("កំពុងរៀបចំលទ្ធផល... ⏳")
-    
+async def handle_photo(u, c):
+    msg = await u.message.reply_text("🔎 កំពុងស្វែងរក...")
     try:
-        # ទាញយក Link រូបភាពពី Telegram (Link នេះរស់បាន 1 ម៉ោង)
-        photo = update.message.photo[-1]
-        file = await context.bot.get_file(photo.file_id)
-        image_url = file.file_path
+        file = await c.bot.get_file(u.message.photo[-1].file_id)
+        markup = get_buttons(file.file_path)
+        await msg.delete()
+        await u.message.reply_text("✅ ជ្រើសរើសប្រភពស្វែងរក៖", reply_markup=markup)
+    except: await msg.edit_text("❌ Error!")
 
-        reply_markup = get_search_buttons(image_url)
-        
-        await status_msg.delete() # លុបសារ "កំពុងរៀបចំ" ចេញ
-        await update.message.reply_text(
-            "✅ ស្វែងរករួចរាល់! សូមជ្រើសរើស Browser ខាងក្រោម៖",
-            reply_markup=reply_markup
-        )
-        
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        await status_msg.edit_text("❌ មានបញ្ហាបច្ចេកទេស។ សូមព្យាយាមផ្ញើរូបភាពម្តងទៀត។")
-
-# 4. ដំណើរការចម្បង
+# 4. Main
 def main():
-    if not TOKEN:
-        logger.error("សូមដាក់ BOT_TOKEN ក្នុង Environment Variables!")
-        return
-        
+    if not TOKEN: return
     threading.Thread(target=run_flask, daemon=True).start()
-    
     app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_image))
     
-    logger.info("Image Search Bot with Baidu started...")
+    asyncio.get_event_loop().create_task(keep_alive(app))
+    app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("ផ្ញើរូបមក!")))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
