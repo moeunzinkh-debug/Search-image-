@@ -20,7 +20,7 @@ def run_flask():
     server.run(host='0.0.0.0', port=port)
 
 TOKEN = os.environ.get("BOT_TOKEN")
-MY_USER_ID = os.environ.get("MY_USER_ID") # ប្រាកដថាបានដាក់ ID ក្នុង Render
+MY_USER_ID = os.environ.get("MY_USER_ID")
 
 # 2. មុខងារផ្ញើសាររំលឹក (១ ថ្ងៃម្តង)
 async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
@@ -35,24 +35,30 @@ async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Reminder error: {e}")
 
-# 3. មុខងារស្វែងរករូបភាព
+# 3. មុខងារស្វែងរករូបភាព (បន្ថែម Bing)
 def get_search_markup(image_url):
     keyboard = [
         [InlineKeyboardButton("🔍 Google Lens", url=f"https://lens.google.com/uploadbyurl?url={image_url}")],
+        [InlineKeyboardButton("🔵 Bing Visual Search", url=f"https://www.bing.com/images/searchbyimage?cbir=sbi&imgurl={image_url}")],
         [InlineKeyboardButton("🖼 Yandex Images", url=f"https://yandex.com/images/search?rpt=imageview&url={image_url}")],
         [InlineKeyboardButton("🇨🇳 Baidu Search", url=f"https://graph.baidu.com/details?is_not_show_man_search=1&image={image_url}")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    status = await update.message.reply_text("🔎 កំពុងរៀបចំ Link...")
+    status = await update.message.reply_text("🔎 កំពុងរៀបចំ Link ស្វែងរក...")
     try:
         file = await context.bot.get_file(update.message.photo[-1].file_id)
         image_url = file.file_path
+        
         await status.delete()
-        await update.message.reply_text("✅ រួចរាល់! សូមជ្រើសរើស Browser៖", reply_markup=get_search_markup(image_url))
+        await update.message.reply_text(
+            "✅ រួចរាល់! សូមជ្រើសរើស Browser ខាងក្រោម៖", 
+            reply_markup=get_search_markup(image_url)
+        )
     except Exception as e:
-        await status.edit_text(f"❌ កំហុស៖ {e}")
+        logger.error(f"Error: {e}")
+        await status.edit_text(f"❌ កំហុសបច្ចេកទេស។ សូមព្យាយាមម្តងទៀត។")
 
 # 4. ដំណើរការចម្បង
 def main():
@@ -62,22 +68,20 @@ def main():
         
     threading.Thread(target=run_flask, daemon=True).start()
     
-    # បង្កើត Application
     app = Application.builder().token(TOKEN).build()
     
-    # --- កំណត់ម៉ោងផ្ញើសាររំលឹក ---
     # កំណត់ឱ្យផ្ញើរាល់ថ្ងៃ ម៉ោង ៨:០០ ព្រឹក (ម៉ោងនៅកម្ពុជា)
-    timezone = pytz.timezone("Asia/Phnom_Penh")
-    job_queue = app.job_queue
-    job_queue.run_daily(
-        send_daily_reminder, 
-        time=datetime.time(hour=8, minute=0, second=0, tzinfo=timezone)
-    )
+    if MY_USER_ID:
+        timezone = pytz.timezone("Asia/Phnom_Penh")
+        app.job_queue.run_daily(
+            send_daily_reminder, 
+            time=datetime.time(hour=8, minute=0, second=0, tzinfo=timezone)
+        )
     
-    app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("សូមផ្ញើរូបភាពមក!")))
+    app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("សូមផ្ញើររូបភាពមក ដើម្បីស្វែងរក!")))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
-    logger.info("Bot started with Daily Reminder (8:00 AM)...")
+    logger.info("Bot started with Bing Search & Daily Reminder...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
