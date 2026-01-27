@@ -8,7 +8,7 @@ from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
-# 1. Setup Logging & Flask
+# 1. កំណត់ Logging & Flask
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -20,11 +20,10 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     server.run(host='0.0.0.0', port=port)
 
-# 2. Database Setup (សម្រាប់កត់ទុក ID អ្នកប្រើប្រាស់)
+# 2. ការគ្រប់គ្រង Database (SQLite)
 def init_db():
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
-    # រក្សាទុកតែ user_id បានហើយ ព្រោះយើងមិនបាច់បិទ Ads ជារៀងរហូតទេ
     c.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)')
     conn.commit()
     conn.close()
@@ -36,7 +35,7 @@ def register_user(user_id):
     conn.commit()
     conn.close()
 
-# 3. មុខងារផ្ញើ Ads (២ ដងក្នុងមួយថ្ងៃ)
+# 3. មុខងារផ្សាយ Ads (២ ដងក្នុងមួយថ្ងៃ)
 async def send_broadcast_ads(context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
@@ -44,12 +43,11 @@ async def send_broadcast_ads(context: ContextTypes.DEFAULT_TYPE):
     active_users = c.fetchall()
     conn.close()
 
-    ad_text = "📢 *ការផ្សព្វផ្សាយពាណិជ្ជកម្ម*\n\nសូមស្វាគមន៍មកកាន់សេវាកម្មរបស់យើង! សូមចុចប៊ូតុងខាងក្រោមសម្រាប់ព័ត៌មានបន្ថែម។"
+    ad_text = "📢 *ការផ្សព្វផ្សាយពាណិជ្ជកម្មប្រចាំថ្ងៃ*\n\nសូមអរគុណដែលបានប្រើប្រាស់បូតរបស់យើង! សូមកុំភ្លេចចូលរួមជាមួយ Channel របស់យើងដើម្បីទទួលបានព័ត៌មានថ្មីៗ។"
     
-    # ប៊ូតុង Ads និងប៊ូតុង "បិទ"
     keyboard = [
-        [InlineKeyboardButton("🔗 ចូលទៅកាន់គេហទំព័រ", url="https://yourlink.com")],
-        [InlineKeyboardButton("❌ បិទការបង្ហាញ (Close)", callback_data="close_ad")]
+        [InlineKeyboardButton("🔗 ចូលទៅកាន់ Channel", url="https://t.me/YourChannel")],
+        [InlineKeyboardButton("❌ បិទ (Close)", callback_data="close_ad")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -64,44 +62,62 @@ async def send_broadcast_ads(context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             continue
 
-# 4. Handlers
+# 4. មុខងារស្វែងរករូបភាព (Google, Bing, Yandex, Baidu)
+def get_search_markup(image_url):
+    keyboard = [
+        [InlineKeyboardButton("🔍 Google Lens", url=f"https://lens.google.com/uploadbyurl?url={image_url}")],
+        [InlineKeyboardButton("🔵 Bing Search", url=f"https://www.bing.com/images/searchbyimage?cbir=sbi&imgurl={image_url}")],
+        [InlineKeyboardButton("🖼 Yandex Images", url=f"https://yandex.com/images/search?rpt=imageview&url={image_url}")],
+        [InlineKeyboardButton("🇨🇳 Baidu Search", url=f"https://graph.baidu.com/details?is_not_show_man_search=1&image={image_url}")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    register_user(update.effective_user.id) # ចុះឈ្មោះអ្នកប្រើពេលគេផ្ញើរូប
+    status = await update.message.reply_text("🔎 កំពុងរៀបចំ Link ស្វែងរក...")
+    try:
+        file = await context.bot.get_file(update.message.photo[-1].file_id)
+        image_url = file.file_path
+        await status.delete()
+        await update.message.reply_text("✅ រួចរាល់! សូមជ្រើសរើស Browser៖", reply_markup=get_search_markup(image_url))
+    except Exception as e:
+        await status.edit_text(f"❌ កំហុស៖ {e}")
+
+# 5. Handlers ផ្សេងៗ
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    register_user(update.effective_user.id)
-    await update.message.reply_text("សួស្តី! សូមផ្ញើរូបភាពមកដើម្បីស្វែងរកប្រភព។")
+    register_user(update.effective_user.id) # ចុះឈ្មោះអ្នកប្រើពេលគេចុច Start
+    await update.message.reply_text("សួស្តី! សូមផ្ញើរូបភាពមក ដើម្បីស្វែងរកប្រភព។")
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    # នៅពេល User ចុចប៊ូតុង "បិទ"
     if query.data == "close_ad":
         try:
-            await query.message.delete() # លុបសារ Ads នោះចោល
-            await query.answer("Ads ត្រូវបានបិទ")
-        except Exception as e:
-            logger.error(f"Error deleting message: {e}")
+            await query.message.delete()
+            await query.answer("បិទរួចរាល់")
+        except:
+            await query.answer("មិនអាចលុបសារបានឡើយ")
 
-# 5. Main Function
+# 6. ដំណើរការចម្បង
 def main():
     init_db()
     TOKEN = os.environ.get("BOT_TOKEN")
-    
+    if not TOKEN: return
+
     threading.Thread(target=run_flask, daemon=True).start()
     
     app = Application.builder().token(TOKEN).build()
     
-    # កំណត់ម៉ោងផ្ញើ Ads ២ ដងក្នុងមួយថ្ងៃ (ម៉ោង ៨ ព្រឹក និង ៨ យប់)
+    # កំណត់ម៉ោងផ្សាយ Ads (៨ ព្រឹក និង ៨ យប់ ម៉ោងនៅកម្ពុជា)
     timezone = pytz.timezone("Asia/Phnom_Penh")
-    job_queue = app.job_queue
-    
-    # បាញ់ Ads ម៉ោង ៨ ព្រឹក
-    job_queue.run_daily(send_broadcast_ads, time=datetime.time(hour=8, minute=0, tzinfo=timezone))
-    # បាញ់ Ads ម៉ោង ៨ យប់
-    job_queue.run_daily(send_broadcast_ads, time=datetime.time(hour=20, minute=0, tzinfo=timezone))
+    app.job_queue.run_daily(send_broadcast_ads, time=datetime.time(hour=8, minute=0, tzinfo=timezone))
+    app.job_queue.run_daily(send_broadcast_ads, time=datetime.time(hour=20, minute=0, tzinfo=timezone))
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(handle_callback))
-    # កុំភ្លេច add_handler សម្រាប់ handle_photo របស់បងពីកូដមុនចូលទីនេះផង...
     
-    app.run_polling()
+    logger.info("Bot is running with Image Search & 2x Daily Ads...")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
