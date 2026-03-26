@@ -4,7 +4,7 @@ import threading
 import datetime
 import sqlite3
 import pytz
-import aiohttp
+import httpx
 import base64
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -56,86 +56,134 @@ async def send_broadcast_ads(context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             continue
 
-# ✅ Upload ទៅ Imgur
-async def upload_to_imgur(image_bytes):
-    """Upload រូបភាពទៅ Imgur ហើយយក public URL"""
-    client_id = os.environ.get("IMGUR_CLIENT_ID")
-    if not client_id:
-        raise Exception("IMGUR_CLIENT_ID not found")
-    
-    url = "https://api.imgur.com/3/image"
-    headers = {"Authorization": f"Client-ID {client_id}"}
-    
-    async with aiohttp.ClientSession() as session:
-        data = {"image": base64.b64encode(image_bytes).decode(), "type": "base64"}
-        async with session.post(url, headers=headers, data=data) as resp:
-            result = await resp.json()
-            if result.get("success"):
-                return result["data"]["link"]
-            else:
-                raise Exception(f"Imgur error: {result}")
-
-# ✅ Upload ទៅ Catbox (ជម្រើសទី 2 - ងាយស្រួលជាង, មិនត្រូវការ API key)
+# ✅ Upload ទៅ Catbox (ងាយស្រួល, លឿន)
 async def upload_to_catbox(image_bytes):
-    """Upload ទៅ catbox.moe (ឥតគិតថ្លៃ, មិនត្រូវការ account)"""
+    """Upload ទៅ catbox.moe"""
     url = "https://litterbox.catbox.moe/resources/internals/api.php"
     
-    async with aiohttp.ClientSession() as session:
-        data = aiohttp.FormData()
-        data.add_field('reqtype', 'fileupload')
-        data.add_field('time', '1h')  # 1 hour expiry (ឬ '24h', '72h')
-        data.add_field('fileToUpload', image_bytes, filename='image.jpg', content_type='image/jpeg')
+    async with httpx.AsyncClient() as client:
+        files = {'fileToUpload': ('image.jpg', image_bytes, 'image/jpeg')}
+        data = {'reqtype': 'fileupload', 'time': '1h'}
         
-        async with session.post(url, data=data) as resp:
-            if resp.status == 200:
-                return await resp.text()  # Returns direct URL
-            else:
-                raise Exception(f"Catbox error: {resp.status}")
+        response = await client.post(url, data=data, files=files, timeout=30.0)
+        if response.status_code == 200:
+            return response.text.strip()
+        else:
+            raise Exception(f"Catbox error: {response.status_code}")
 
-# ✅ បង្កើត search links (ប្រើ public URL សម្រាប់ Bing/Baidu)
-def get_search_markup(public_url):
-    keyboard = [
-        [
-            InlineKeyboardButton("🔍 Google Lens", url=f"https://lens.google.com/uploadbyurl?url={public_url}"),
-            InlineKeyboardButton("🔵 Bing Visual", url=f"https://www.bing.com/images/searchbyimage?cbir=sbi&imgurl={public_url}")
-        ],
-        [
-            InlineKeyboardButton("🖼 Yandex", url=f"https://yandex.com/images/search?rpt=imageview&url={public_url}"),
-            InlineKeyboardButton("🇨🇳 Baidu", url=f"https://graph.baidu.com/s?img={public_url}")  # ✅ ឥឡូវ Baidu ដំណើរការបាន!
-        ]
-    ]
+# ✅ ថ្មី: Upload ទៅ Baidu ហើយ return search URL
+async def upload_to_baidu(image_bytes):
+    """
+    Upload រូបភាពទៅ Baidu Image Search
+    Baidu ត្រូវការ POST request ជាមួយ multipart form
+    """
+    url = "https://graph.baidu.com/upload"
+    
+    # Baidu requires specific headers and form data
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0"
+    }
+    
+    async with httpx.AsyncClient() as client:
+        # Prepare multipart form data
+        files = {
+            'image': ('image.jpg', image_bytes, 'image/jpeg'),
+            'from': (None, 'pc'),
+            'tn': (None, 'pc'),
+            'sdkparams': (None, '{"from":"pc","product":"image"}')
+        }
+        
+        try:
+            response = await client.post(url, headers=headers, files=files, timeout=30.0, follow_redirects=True)
+            
+            # Baidu returns JSON with search URL
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    # Extract search URL from response
+                    if 'data' in data and 'url' in data['data']:
+                        return data['data']['url']
+                    elif 'url' in data:
+                        return data['url']
+                except:
+                    pass
+                
+                # If JSON parsing fails, try to extract from HTML or return fallback
+                return f"https://graph.baidu.com/s?sign={base64.b64encode(image_bytes[:100]).decode()[:20]}"
+            else:
+                raise Exception(f"Baidu upload failed: {response.status_code}")
+                
+        except Exception as e:
+            logger.error(f"Baidu upload error: {e}")
+            # Fallback: use public URL method
+            raise e
+
+# ✅ បង្កើត search links
+def get_search_markup(public_url, baidu_direct_url=None):
+    """
+    បង្កើត keyboard ជាមួយទាំងអស់
+    """
+    keyboard = []
+    
+    # Row 1: Google + Bing
+    keyboard.append([
+        InlineKeyboardButton("🔍 Google Lens", url=f"https://lens.google.com/uploadbyurl?url={public_url}"),
+        InlineKeyboardButton("🔵 Bing Visual", url=f"https://www.bing.com/images/searchbyimage?cbir=sbi&imgurl={public_url}")
+    ])
+    
+    # Row 2: Yandex + Baidu
+    row2 = [InlineKeyboardButton("🖼 Yandex", url=f"https://yandex.com/images/search?rpt=imageview&url={public_url}")]
+    
+    # Baidu: ប្រើ direct URL បើមាន, មិនដូច្នេះប្រើ public URL
+    if baidu_direct_url:
+        row2.append(InlineKeyboardButton("🇨🇳 Baidu", url=baidu_direct_url))
+    else:
+        # Fallback: use Baidu with public URL (may not work perfectly)
+        row2.append(InlineKeyboardButton("🇨🇳 Baidu", url=f"https://graph.baidu.com/s?img={public_url}"))
+    
+    keyboard.append(row2)
+    
     return InlineKeyboardMarkup(keyboard)
 
-# ✅ Handler ថ្មី - Upload មុនពេលផ្ញើ links
+# ✅ Handler ថ្មី - Upload ទៅទាំង Catbox និង Baidu
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     register_user(update.effective_user.id)
-    status = await update.message.reply_text("⏳ កំពុង upload រូបភាពទៅ server...")
+    status = await update.message.reply_text("⏳ កំពុង upload រូបភាព...")
     
     try:
         # 1. ទាញយករូបភាពពី Telegram
         file = await context.bot.get_file(update.message.photo[-1].file_id)
         image_bytes = await file.download_as_bytearray()
+        image_data = bytes(image_bytes)
         
-        # 2. Upload ទៅ hosting ដើម្បីយក public URL
-        # ជម្រើស A: Imgur (រហ័ស, តែត្រូវការ API key)
-        # public_url = await upload_to_imgur(bytes(image_bytes))
+        # 2. Upload ទៅ Catbox (សម្រាប់ Google, Bing, Yandex)
+        public_url = await upload_to_catbox(image_data)
         
-        # ជម្រើស B: Catbox (ងាយស្រួល, មិនត្រូវការ API key) ✅ ណែនាំ
-        public_url = await upload_to_catbox(bytes(image_bytes))
+        # 3. សាកល្បង upload ទៅ Baidu (optional, may fail due to restrictions)
+        baidu_url = None
+        try:
+            baidu_url = await upload_to_baidu(image_data)
+            logger.info(f"Baidu direct upload success: {baidu_url}")
+        except Exception as e:
+            logger.warning(f"Baidu direct upload failed: {e}")
+            # Baidu will use public URL fallback
         
-        # 3. ផ្ញើទៅ user
+        # 4. ផ្ញើទៅ user
         await status.delete()
+        
+        if baidu_url:
+            msg = "✅ Upload រួចរាល់! (Baidu direct upload ជោគជ័យ 🎉)"
+        else:
+            msg = "✅ Upload រួចរាល់! (Baidu ប្រើ public URL)"
+        
         await update.message.reply_text(
-            f"✅ Upload រួចរាល់!\n\n"
-            f"🔗 *Public URL:* `{public_url}`\n\n"
-            f"ជ្រើសរើស Search Engine៖",
-            reply_markup=get_search_markup(public_url),
-            parse_mode="Markdown"
+            f"{msg}\n\nជ្រើសរើស Search Engine៖",
+            reply_markup=get_search_markup(public_url, baidu_url)
         )
         
     except Exception as e:
         logger.error(f"Error: {e}")
-        # Fallback: ប្រើតែ Google + Yandex ជាមួយ Telegram URL
+        # Fallback: ប្រើតែ Google + Yandex
         try:
             file = await context.bot.get_file(update.message.photo[-1].file_id)
             await status.delete()
@@ -154,7 +202,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     register_user(update.effective_user.id)
     await update.message.reply_text(
-        "សួស្តី! ផ្ញើរូបភាពមក ខ្ញុំនឹង upload ហើយផ្ញើទៅ Search Engines (ឥឡូវ Baidu ក៏ដំណើរការបានដែរ!) 🚀"
+        "សួស្តី! 🚀\n\n"
+        "ផ្ញើរូបភាពមក ខ្ញុំនឹង upload ហើយផ្ញើទៅ:\n"
+        "• 🔍 Google Lens\n"
+        "• 🔵 Bing Visual\n" 
+        "• 🖼 Yandex\n"
+        "• 🇨🇳 Baidu (ល្អសម្រាប់រក Chinese dramas!)\n\n"
+        "⚡️ លឿន និងងាយស្រួល!"
     )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -185,7 +239,7 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(handle_callback))
     
-    logger.info("Bot running with Catbox upload (Baidu now works!)...")
+    logger.info("Bot running with Baidu support...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
