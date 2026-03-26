@@ -64,16 +64,21 @@ async def send_broadcast_ads(context: ContextTypes.DEFAULT_TYPE):
 
 # 4. មុខងារស្វែងរករូបភាព (Google, Bing, Yandex, Baidu)
 def get_search_markup(image_url):
+    # ✅ បានកែប្រែនៅទីនេះ - ដាក់ប៊ូតុងជា 2 rows មួយៗមាន 2 ប៊ូតុង
     keyboard = [
-        [InlineKeyboardButton("🔍 Google Lens", url=f"https://lens.google.com/uploadbyurl?url={image_url}")],
-        [InlineKeyboardButton("🔵 Bing Search", url=f"https://www.bing.com/images/searchbyimage?cbir=sbi&imgurl={image_url}")],
-        [InlineKeyboardButton("🖼 Yandex Images", url=f"https://yandex.com/images/search?rpt=imageview&url={image_url}")],
-        [InlineKeyboardButton("🇨🇳 Baidu Search", url=f"https://graph.baidu.com/details?is_not_show_man_search=1&image={image_url}")]
+        [
+            InlineKeyboardButton("🔍 Google Lens", url=f"https://lens.google.com/uploadbyurl?url={image_url}"),
+            InlineKeyboardButton("🔵 Bing Search", url=f"https://www.bing.com/images/searchbyimage?cbir=sbi&imgurl={image_url}")
+        ],
+        [
+            InlineKeyboardButton("🖼 Yandex Images", url=f"https://yandex.com/images/search?rpt=imageview&url={image_url}"),
+            InlineKeyboardButton("🇨🇳 Baidu Search", url=f"https://graph.baidu.com/details?is_not_show_man_search=1&image={image_url}")
+        ]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    register_user(update.effective_user.id) # ចុះឈ្មោះអ្នកប្រើពេលគេផ្ញើរូប
+    register_user(update.effective_user.id)
     status = await update.message.reply_text("🔎 កំពុងរៀបចំ Link ស្វែងរក...")
     try:
         file = await context.bot.get_file(update.message.photo[-1].file_id)
@@ -85,7 +90,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # 5. Handlers ផ្សេងៗ
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    register_user(update.effective_user.id) # ចុះឈ្មោះអ្នកប្រើពេលគេចុច Start
+    register_user(update.effective_user.id)
     await update.message.reply_text("សួស្តី! សូមផ្ញើរូបភាពមក ដើម្បីស្វែងរកប្រភព។")
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -121,3 +126,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+    
